@@ -54,11 +54,11 @@
   .ca-pri { background:#3182f6; color:#fff; } .ca-pri:hover { background:#1b64da; }
   .ca-pri:disabled { background:#d1d6db; cursor:default; }
   .ca-sec { background:#f2f4f6; color:#333d4b; } .ca-sec:hover { background:#e5e8eb; }
-  .input-row { padding:14px 20px; background:#fff; display:flex; gap:8px; flex-shrink:0; border-top:1px solid #f2f4f6; }
-  .input-row input { flex:1; border:1.5px solid #e5e8eb; border-radius:12px; padding:13px 16px; font-size:14.5px; font-family:inherit; outline:none; }
-  .input-row input:focus { border-color:#3182f6; }
-  .input-row input:disabled { background:#f2f4f6; }
-  .input-row button { background:#3182f6; color:#fff; font-weight:600; font-size:14px; padding:0 20px; border-radius:12px; }
+  .input-row { padding:14px 20px; background:#fff; display:flex; gap:8px; flex-shrink:0; border-top:1px solid #f2f4f6; align-items:flex-end; }
+  .input-row textarea { flex:1; border:1.5px solid #e5e8eb; border-radius:12px; padding:12px 16px; font-size:14.5px; font-family:inherit; outline:none; resize:none; max-height:140px; overflow-y:auto; line-height:1.5; }
+  .input-row textarea:focus { border-color:#3182f6; }
+  .input-row textarea:disabled { background:#f2f4f6; }
+  .input-row button { background:#3182f6; color:#fff; font-weight:600; font-size:14px; padding:0 20px; height:46px; border-radius:12px; flex-shrink:0; }
   .panel { flex:1; display:flex; flex-direction:column; background:#eef1f4; }
   .chips { display:flex; gap:6px; padding:12px 18px 8px; overflow-x:auto; flex-shrink:0; }
   .chip { flex-shrink:0; font-size:12.5px; font-weight:600; padding:7px 12px; border-radius:18px; background:#e2e6ea; color:#9aa3ad; border:1.5px solid transparent; transition:.15s; }
@@ -122,7 +122,7 @@
   <div class="chat-col">
     <div class="msgs" id="consultMsgs"></div>
     <div class="input-row">
-      <input id="consultInput" placeholder="답변을 입력하세요" onkeydown="if(event.key==='Enter' && !event.isComposing && event.keyCode!==229)sendConsult()">
+      <textarea id="consultInput" rows="1" placeholder="답변을 입력하세요  (Shift+Enter 줄바꿈)" oninput="autoGrow(this)" onkeydown="onChatKey(event, sendConsult)"></textarea>
       <button onclick="sendConsult()">보내기</button>
     </div>
   </div>
@@ -133,7 +133,7 @@
   <div class="chat-col">
     <div class="msgs" id="buildMsgs"></div>
     <div class="input-row">
-      <input id="buildInput" placeholder="답변을 입력하세요" onkeydown="if(event.key==='Enter' && !event.isComposing && event.keyCode!==229)sendBuild()">
+      <textarea id="buildInput" rows="1" placeholder="답변을 입력하세요  (Shift+Enter 줄바꿈)" oninput="autoGrow(this)" onkeydown="onChatKey(event, sendBuild)"></textarea>
       <button onclick="sendBuild()">보내기</button>
     </div>
   </div>
@@ -300,19 +300,13 @@ function sysNote(listId, text){
 function showTyping(listId){ var m=addMsg(listId,'ai typing','···'); return m; }
 function setBusy(b){ st.busy=b; ['consultInput','buildInput'].forEach(function(id){ var e=$(id); if(e) e.disabled=b; }); }
 
-/* ====== LLM 호출 ====== */
-async function callLLM(){
-  var res = await fetch(WORKER_URL, {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({ system: SYSTEM_PROMPT, mode: st.mode, from: st.from, messages: st.hist })
-  });
-  var data = await res.json();
-  if(!res.ok || data.error){
-    var detail = data.raw ? (" / 상세: " + JSON.stringify(data.raw).slice(0,500)) : "";
-    throw new Error((data.error || ("HTTP "+res.status)) + detail);
+/* ====== 입력창: 자동 높이 + Shift+Enter 줄바꿈 ====== */
+function autoGrow(el){ el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,140)+'px'; }
+function onChatKey(e, sendFn){
+  if(e.key==='Enter' && !e.shiftKey && !e.isComposing && e.keyCode!==229){
+    e.preventDefault();
+    sendFn();
   }
-  return data.text || "";
 }
 function parseBlocks(text){
   var out={ chat:text, cards:null, section:null };
@@ -322,25 +316,48 @@ function parseBlocks(text){
   if(sm){ try{ out.section=JSON.parse(sm[1].trim()); }catch(e){} out.chat=out.chat.replace(sm[0],'').trim(); }
   return out;
 }
-function handleAI(listId, text){
-  var p = parseBlocks(text);
-  if(p.chat) addMsg(listId,'ai',escBody(p.chat));
-  if(p.cards && p.cards.length) renderCards(p.cards);
-  if(p.section) applySection(p.section);
-}
+/* 화면 표시용: 코드펜스(```portly-...) 이후는 사용자에게 안 보이게 */
+function visiblePart(text){ return text.split("```")[0]; }
+
 async function runTurn(listId, userText, showBubble){
   if(st.busy) return;
   if(showBubble) addMsg(listId,'me',esc(userText));
   st.hist.push({ role:"user", text:userText });
   setBusy(true);
-  var t=showTyping(listId);
+  var typing = showTyping(listId);
   try{
-    var text = await callLLM();
-    if(t.parentNode) t.parentNode.removeChild(t);
-    st.hist.push({ role:"model", text:text });
-    handleAI(listId, text);
+    var res = await fetch(WORKER_URL, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ system: SYSTEM_PROMPT, mode: st.mode, from: st.from, messages: st.hist })
+    });
+    if(!res.ok){
+      var ed = await res.json().catch(function(){ return {}; });
+      var detail = ed.raw ? (" / 상세: " + JSON.stringify(ed.raw).slice(0,400)) : "";
+      throw new Error((ed.error || ("HTTP "+res.status)) + detail);
+    }
+    if(typing.parentNode) typing.parentNode.removeChild(typing);
+    var bubble = addMsg(listId,'ai','');
+    var reader = res.body.getReader();
+    var decoder = new TextDecoder();
+    var full = "";
+    while(true){
+      var c = await reader.read();
+      if(c.done) break;
+      full += decoder.decode(c.value, { stream:true });
+      bubble.innerHTML = escBody(visiblePart(full));
+      $(listId).scrollTop = $(listId).scrollHeight;
+    }
+    /* 완료 — 블록 파싱 후 마무리 */
+    st.hist.push({ role:"model", text: full });
+    var p = parseBlocks(full);
+    if(p.chat){ bubble.innerHTML = escBody(p.chat); }
+    else if(bubble.parentNode){ bubble.parentNode.removeChild(bubble); }
+    if(p.cards && p.cards.length) renderCards(p.cards);
+    if(p.section) applySection(p.section);
+    $(listId).scrollTop = $(listId).scrollHeight;
   }catch(e){
-    if(t.parentNode) t.parentNode.removeChild(t);
+    if(typing.parentNode) typing.parentNode.removeChild(typing);
     sysNote(listId, "⚠️ AI 응답 오류: " + e.message + " — 잠시 후 다시 시도해주세요.");
   }
   setBusy(false);
@@ -362,7 +379,7 @@ function startDirect(){
 /* ====== CONSULT ====== */
 function sendConsult(){
   var inp=$('consultInput'); var v=inp.value.trim(); if(!v||st.busy) return;
-  inp.value='';
+  inp.value=''; inp.style.height='auto';
   runTurn('consultMsgs', v, true);
 }
 function staleCards(){
@@ -408,7 +425,7 @@ function selectProject(c){
 /* ====== BUILD ====== */
 function sendBuild(){
   var inp=$('buildInput'); var v=inp.value.trim(); if(!v||st.busy) return;
-  inp.value='';
+  inp.value=''; inp.style.height='auto';
   focusSection(st.active);
   runTurn('buildMsgs', v, true);
 }
