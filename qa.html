@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Portly — QA 시뮬레이터</title>
+<style>
+  * { box-sizing:border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Pretendard",sans-serif; background:#f9fafb; color:#191f28; margin:0; padding:24px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:#8b95a1; font-size:13px; margin-bottom:18px; }
+  .bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:#fff; border:1px solid #f2f4f6; border-radius:12px; padding:14px; margin-bottom:16px; }
+  select, input[type=number] { font-family:inherit; font-size:14px; padding:9px 12px; border:1.5px solid #e5e8eb; border-radius:10px; outline:none; }
+  select:focus, input:focus { border-color:#3182f6; }
+  label { font-size:13px; color:#4e5968; font-weight:600; }
+  button { font-family:inherit; cursor:pointer; border:none; border-radius:10px; font-weight:600; font-size:14px; padding:10px 16px; }
+  .run { background:#3182f6; color:#fff; } .run:hover{ background:#1b64da; } .run:disabled{ background:#d1d6db; cursor:default; }
+  .stop { background:#fdecea; color:#c0392b; }
+  .copy { background:#f2f4f6; color:#333d4b; }
+  #log { background:#fff; border:1px solid #f2f4f6; border-radius:12px; padding:18px; min-height:200px; }
+  .turn { margin-bottom:14px; padding:12px 14px; border-radius:12px; font-size:14px; line-height:1.6; white-space:pre-wrap; }
+  .portly { background:#f2f4f6; }
+  .persona { background:#e8f3ff; }
+  .who { font-size:11.5px; font-weight:700; letter-spacing:.3px; margin-bottom:5px; display:block; }
+  .portly .who { color:#3182f6; }
+  .persona .who { color:#1b64da; }
+  .tag { display:inline-block; font-size:11px; font-weight:700; color:#0a7d3e; background:#e6f7ee; padding:2px 7px; border-radius:6px; margin-top:6px; }
+  .err { color:#c0392b; font-size:13px; }
+  .note { font-size:12px; color:#8b95a1; margin-top:10px; }
+  .dim { color:#b0b8c1; font-style:italic; }
+</style>
+</head>
+<body>
+<h1>Portly QA 시뮬레이터</h1>
+<p class="sub">가상 사용자(AI)와 Portly(AI)가 자동으로 대화합니다. 캐릭터를 고르고 실행하세요. 배포된 프록시를 쓰므로 키는 필요 없습니다(API 사용량은 소액 과금).</p>
+
+<div class="bar">
+  <label>가상 사용자</label>
+  <select id="persona"></select>
+  <label>최대 턴</label>
+  <input type="number" id="turns" value="12" min="3" max="30" style="width:70px;">
+  <button class="run" id="runBtn" onclick="runSim()">▶ 실행</button>
+  <button class="stop" id="stopBtn" onclick="STOP=true" disabled>■ 중지</button>
+  <button class="copy" onclick="copyLog()">전사 복사</button>
+</div>
+
+<div id="log"><span class="dim">캐릭터를 고르고 ▶ 실행을 누르면 대화가 자동 생성됩니다.</span></div>
+<p class="note" id="status"></p>
+
+<!-- Portly 시스템 프롬프트 (앱과 동일 v2) -->
+<script type="text/plain" id="portlyPrompt">
+[역할] 너는 한국 시장 프로덕트 디자이너(PD)를 위한 포트폴리오 기획 파트너 "Portly"다. 사용자가 해온 작업을 인터뷰해서, 면접에 바로 쓸 수 있는 포폴 케이스의 "구조와 초안"을 함께 만든다. 결과물은 완성 포폴이 아니라 구조가 잡힌 초안이며, 사용자는 Figma로 옮겨 완성한다.
+[페르소나] 따뜻하되 날카로운 멘토. 사용자의 편이다. 칭찬으로 시간 낭비하지 않되, 약점은 항상 "어떻게 강해지는지"와 같이 짚는다. 한국어, 부드러운 존대.
+[절대 원칙] 1. 환각 수치 금지(사용자가 말한 수치만). 없으면 의사결정 근거·정성 신호로 대체. 2. 의사결정 분기(A안 vs B안) 최소 하나. 3. what보다 why를 더 깊이. 4. 한 번에 질문 하나, 약하면 후속질문(섹션당 최대 2회). 5. 사용자 말을 그대로 베끼지 말고 포폴 언어로 다듬는다.
+[모드] 시스템 끝에 [MODE: CONSULT|BUILD]와 [FROM: ...]이 온다.
+■ CONSULT: 작업을 듣고 포폴 후보 4개를 추천. 첫 메시지(사용자가 "[시작]")엔 "지금까지 회사에서 해온 작업을 편하게 다 말씀해주세요" 한 문장. 충분히 들으면 후보 4개를 채팅 뒤 아래 블록으로 출력.
+```portly-cards
+[{"title":"..","reason":"..","data":".."},{"title":"..","reason":"..","data":".."},{"title":"..","reason":"..","data":".."},{"title":"..","reason":"..","data":".."}]
+```
+■ BUILD: 7섹션(0표지 1배경 2문제 3가설 4해결책·의사결정 5결과·검증 6회고)을 한 섹션씩 인터뷰. 섹션을 채울 때 채팅 뒤 아래 블록.
+```portly-section
+{"sectionId":0,"draft":true,"title":"요약 타이틀","body":"포폴 언어로 다듬은 본문","imageHint":"이미지 가이드"}
+```
+[톤] 솔직하되 항상 사용자 편. 한 응답에 블록 최대 하나.
+</script>
+
+<script>
+var PROXY_URL = "https://portly-blue.vercel.app/api/chat";
+var PORTLY = document.getElementById('portlyPrompt').textContent.trim();
+var STOP = false;
+
+var PERSONAS = [
+  { name:"주니어 (답 짧음·데이터 없음)", sys:"너는 경력 1년 주니어 프로덕트 디자이너야. Portly라는 포폴 컨설팅 AI와 대화하는 '사용자'다. 답은 짧고(1~2문장), 자신 없고, 정량 데이터는 거의 없다. 가끔 '잘 모르겠어요'라고 한다. 메타발언 말고 진짜 사용자처럼 답해. 한국어." },
+  { name:"시니어 (상세·정량 풍부)", sys:"너는 7년차 시니어 PD야. Portly와 대화하는 사용자다. 답이 구체적이고 정량 지표(전환율, 리텐션 등)를 자연스럽게 제시한다. 의사결정 근거도 잘 말한다. 메타발언 말고 사용자처럼 답해. 한국어, 2~4문장." },
+  { name:"직군전환자 (결과물O·PD언어 부족)", sys:"너는 마케터에서 PD로 전환 중인 사람이야. 결과물은 만들었지만 'why', '가설', '의사결정' 같은 PD 언어로 설명하는 데 서툴다. 기능 나열식으로 답하는 경향. 메타발언 말고 사용자처럼. 한국어, 2~3문장." },
+  { name:"디자인시스템 전문가 (한 우물)", sys:"너는 디자인 시스템만 3년 판 PD야. 컴포넌트·토큰·일관성 얘기는 깊지만 비즈니스 임팩트나 사용자 리서치 경험은 약하다. 메타발언 말고 사용자처럼. 한국어, 2~3문장." },
+  { name:"사이드빌더 (앱O·회사케이스 부족)", sys:"너는 회사 일보다 사이드 프로젝트(앱 출시)가 강한 PD야. 오너십은 100%지만 회사 케이스가 빈약하다. 메타발언 말고 사용자처럼. 한국어, 2~3문장." },
+  { name:"★성과없음형 (자꾸 위축)", sys:"너는 0to1 스타트업에서 디자인을 혼자 다 했지만 'PO가 감으로 리드해서 성과가 하나도 없다', '내가 주도한 게 없다'며 자꾸 위축되는 PD야. 자기 경험을 평가절하한다. Portly가 격려하며 강점을 끌어내려 해도 처음엔 '그게 의미 있나요' 식으로 반응. 메타발언 말고 사용자처럼. 한국어, 1~3문장." }
+];
+
+var sel = document.getElementById('persona');
+PERSONAS.forEach(function(p,i){ var o=document.createElement('option'); o.value=i; o.textContent=p.name; sel.appendChild(o); });
+
+function parseBlocks(text){
+  var out={ chat:text, cards:null, section:null };
+  var cm = text.match(/```portly-cards\s*([\s\S]*?)```/);
+  if(cm){ try{ out.cards=JSON.parse(cm[1].trim()); }catch(e){} out.chat=out.chat.replace(cm[0],'').trim(); }
+  var sm = text.match(/```portly-section\s*([\s\S]*?)```/);
+  if(sm){ try{ out.section=JSON.parse(sm[1].trim()); }catch(e){} out.chat=out.chat.replace(sm[0],'').trim(); }
+  return out;
+}
+async function callRole(system, mode, from, messages){
+  var r = await fetch(PROXY_URL, { method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ system:system, mode:mode, from:from, messages:messages }) });
+  if(!r.ok){ var e=await r.json().catch(function(){return{};}); throw new Error(e.error || ("HTTP "+r.status)); }
+  return await r.text();
+}
+/* transcript item: {who:'portly'|'persona', full, shown, tag} */
+function portlyMsgs(tr){
+  var arr=[{role:"user", text:"[시작]"}];
+  tr.forEach(function(t){ arr.push({ role: t.who==='portly'?'model':'user', text: t.full }); });
+  return arr;
+}
+function personaMsgs(tr){
+  return tr.map(function(t){ return { role: t.who==='portly'?'user':'model', text: t.who==='portly'?t.shown:t.full }; });
+}
+function render(tr){
+  var log=document.getElementById('log'); log.innerHTML='';
+  tr.forEach(function(t){
+    var d=document.createElement('div'); d.className='turn '+t.who;
+    d.innerHTML='<span class="who">'+(t.who==='portly'?'PORTLY':'가상 사용자')+'</span>'+escapeHtml(t.shown)+(t.tag?('<div class="tag">'+t.tag+'</div>'):'');
+    log.appendChild(d);
+  });
+  window.scrollTo(0, document.body.scrollHeight);
+}
+function escapeHtml(s){ var d=document.createElement('div'); d.textContent=s||''; return d.innerHTML.replace(/\n/g,'<br>'); }
+function pushPortly(tr, full){
+  var p=parseBlocks(full); var tag='';
+  if(p.cards) tag='🟦 추천 카드 '+p.cards.length+'개 생성';
+  if(p.section) tag='📄 섹션 '+p.section.sectionId+' 작성 ('+(p.section.title||'')+')';
+  tr.push({ who:'portly', full:full, shown:(p.chat||'(블록만 출력)'), tag:tag });
+  return p;
+}
+function setStatus(s){ document.getElementById('status').textContent=s; }
+
+async function runSim(){
+  STOP=false;
+  document.getElementById('runBtn').disabled=true;
+  document.getElementById('stopBtn').disabled=false;
+  var persona = PERSONAS[sel.value];
+  var maxTurns = parseInt(document.getElementById('turns').value)||12;
+  var tr=[]; var mode="CONSULT"; var from="-";
+  try{
+    setStatus("Portly 인사 생성 중…");
+    var op = await callRole(PORTLY, mode, from, portlyMsgs(tr));
+    pushPortly(tr, op); render(tr);
+    for(var i=0; i<maxTurns && !STOP; i++){
+      setStatus("가상 사용자 응답 중… ("+(i+1)+"/"+maxTurns+")");
+      var u = await callRole(persona.sys, "-", "-", personaMsgs(tr));
+      tr.push({ who:'persona', full:u, shown:u, tag:'' }); render(tr);
+      if(STOP) break;
+      setStatus("Portly 응답 중… ("+(i+1)+"/"+maxTurns+")");
+      var pr = await callRole(PORTLY, mode, from, portlyMsgs(tr));
+      var parsed = pushPortly(tr, pr); render(tr);
+      /* 카드 나오면 자동 선택 → BUILD 전환 (앱의 카드 클릭 시뮬레이션) */
+      if(parsed.cards && parsed.cards.length && mode==="CONSULT"){
+        var pick = parsed.cards[0].title;
+        mode="BUILD"; from="consult";
+        tr.push({ who:'persona', full:"[선택한 프로젝트: "+pick+"] 이 프로젝트로 기획을 시작할게요.", shown:"("+pick+" 선택 — 기획 단계로)", tag:'' });
+        render(tr);
+        setStatus("Portly 기획 시작…");
+        var pr2 = await callRole(PORTLY, mode, from, portlyMsgs(tr));
+        pushPortly(tr, pr2); render(tr);
+      }
+    }
+    setStatus(STOP ? "중지됨." : "대화 완료. 읽으며 약점을 찾아보세요.");
+  }catch(e){
+    var log=document.getElementById('log');
+    var d=document.createElement('div'); d.className='err'; d.textContent="⚠️ 오류: "+e.message;
+    log.appendChild(d);
+    setStatus("오류로 중단됨.");
+  }
+  document.getElementById('runBtn').disabled=false;
+  document.getElementById('stopBtn').disabled=true;
+}
+function copyLog(){
+  var tr=document.querySelectorAll('#log .turn'); var out=[];
+  tr.forEach(function(d){ out.push(d.querySelector('.who').textContent+": "+d.innerText.replace(d.querySelector('.who').textContent,'').trim()); });
+  navigator.clipboard.writeText(out.join("\n\n")).then(function(){ setStatus("전사가 복사됐어요."); });
+}
+</script>
+</body>
+</html>
