@@ -1,5 +1,5 @@
 // Portly proxy on Vercel (US region) + 프롬프트 캐싱 (비스트리밍)
-const MODEL = "claude-haiku-4-5-20251001"; // 품질 더 원하면 "claude-sonnet-4-6"
+const MODEL = "claude-sonnet-4-6"; // 비용 줄이려면 "claude-haiku-4-5-20251001"
 
 export default async function handler(req, res) {
   // CORS: 로컬 파일/다른 출처(QA 시뮬레이터 등)에서도 호출 허용
