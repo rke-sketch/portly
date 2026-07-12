@@ -24,7 +24,7 @@ export default async function handler(req, res) {
         "x-api-key": process.env.ANTHROPIC_KEY,
         "anthropic-version": "2023-06-01"
       },
-      body: JSON.stringify({ model: MODEL, max_tokens: 2048, system: sysBlocks, messages: msgs, stream: true })
+      body: JSON.stringify({ model: MODEL, max_tokens: 4096, system: sysBlocks, messages: msgs, stream: true })
     });
 
     if (!upstream.ok) {
