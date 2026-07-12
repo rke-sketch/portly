@@ -1,7 +1,11 @@
-// Portly proxy on Vercel (US region) + 프롬프트 캐싱 + 스트리밍
+// Portly proxy on Vercel (US region) + 프롬프트 캐싱 (비스트리밍)
 const MODEL = "claude-haiku-4-5-20251001"; // 품질 더 원하면 "claude-sonnet-4-6"
 
 export default async function handler(req, res) {
+  // CORS: 로컬 파일/다른 출처(QA 시뮬레이터 등)에서도 호출 허용
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") { res.status(200).end(); return; }
   if (req.method !== "POST") { res.status(405).json({ error: "POST only" }); return; }
   try {
@@ -14,53 +18,27 @@ export default async function handler(req, res) {
       role: m.role === "model" ? "assistant" : "user",
       content: m.text || ""
     }));
-    const upstream = await fetch("https://api.anthropic.com/v1/messages", {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "content-type": "application/json",
         "x-api-key": process.env.ANTHROPIC_KEY,
         "anthropic-version": "2023-06-01"
       },
-      body: JSON.stringify({ model: MODEL, max_tokens: 2048, system: sysBlocks, messages: msgs, stream: true })
+      body: JSON.stringify({ model: MODEL, max_tokens: 2048, system: sysBlocks, messages: msgs })
     });
-
-    if (!upstream.ok) {
-      const errData = await upstream.json().catch(() => ({}));
-      res.status(upstream.status).json({
-        error: (errData.error && errData.error.message) || ("HTTP " + upstream.status),
-        raw: errData
+    const data = await r.json();
+    if (!r.ok) {
+      res.status(r.status).json({
+        error: (data.error && data.error.message) || ("HTTP " + r.status),
+        raw: data
       });
       return;
     }
-
-    // SSE를 받아 텍스트 델타만 브라우저로 흘려보냄
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache, no-transform");
-    const reader = upstream.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop();
-      for (const line of lines) {
-        const s = line.trim();
-        if (!s.startsWith("data:")) continue;
-        const payload = s.slice(5).trim();
-        if (!payload || payload === "[DONE]") continue;
-        try {
-          const ev = JSON.parse(payload);
-          if (ev.type === "content_block_delta" && ev.delta && typeof ev.delta.text === "string") {
-            res.write(ev.delta.text);
-          }
-        } catch (e) {}
-      }
-    }
-    res.end();
+    const text = data && data.content && data.content[0] && data.content[0].text ? data.content[0].text : "";
+    if (!text) { res.status(502).json({ error: "no_text", raw: data }); return; }
+    res.status(200).json({ text });
   } catch (e) {
-    if (!res.headersSent) res.status(500).json({ error: String(e) });
-    else { try { res.end(); } catch (_) {} }
+    res.status(500).json({ error: String(e) });
   }
 }
